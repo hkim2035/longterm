@@ -1,0 +1,722 @@
+;Ref: Li(2013) Dissertation
+;Single zone & fixed orientation model
+; sxy included for stress calculation
+; theta = beta-90
+; print output
+; stress corrosion threshold
+;ucs model
+;interface/plate
+;75MPa
+;static
+;random properties
+
+
+new
+
+config dyn extra 5 ; ex_1 - plastic state, ex_2 - damage state I, ex_3 - damage state II, ex_4;sum of damage
+
+
+grid 50,110
+
+gen 0,0 0,0.11 0.05,0.11 0.05,0
+model mohr
+
+set plot emf
+;===== Properties =====
+prop den 2700 bulk 32.69e9 shear 20.56e9 coh 20.0e6 fric 40 ten 10.0e6 dil 10
+
+set seed 1,10000,3000
+
+def set_par1
+
+  aload = -64.0e6 ;Pa
+ ;eq_ratio = 5.0 ;0.1%
+  eq_ratio = 1e-3 ;0.1%
+
+  D0 = 0.0 ;initial damage = 0
+  
+  f_res_II = 36.0
+  f_res_I = 36.0
+  c_res = 1.0e6
+
+  s_act = 0.15 ;activation stess or stress threshold
+
+  ;Charles equation
+  I_a0 = 0.1322    ; 1/s
+  I_n = 29.39
+  II_a0 = 0.01424    ;1/s
+  II_n = 46.56
+  ;II_a0 = 0.1322    ; 1/s
+  ;II_n = 29.39
+  
+  I_A = (1.0 - D0)/(exp(I_a0))^I_n
+  II_A = (1.0 - D0)/(exp(II_a0))^II_n
+
+  first_damage_on_I = 0
+	first_damage_on_II = 0
+  first_damage_time_I = 10.0e100
+	first_damage_time_II = 10.0e100
+  first_damage_i_I = 0
+  first_damage_j_I = 0
+ 	first_damage_i_II = 0
+  first_damage_j_II = 0
+ 
+  first_damage_type = 'none'
+  ;scg
+  n_mode2 = 0
+  n_mode1 = 0
+  ;plastic state
+  n_pl = 0
+  
+  tot_time = 0.0
+  time_current = 0.0
+	time_pre = 0.0
+	
+end
+set_par1
+
+
+def sigmav
+  $sum=0.0
+  loop ii(1,izones)
+    $sum=$sum+syy(ii,jzones)
+  end_loop
+  /=abs($sum)/float(izones)
+end
+
+def ramp
+  if step<tot_step then
+    ramp = float(step)/float(tot_step)
+  else
+    ramp = 1.0
+  endif
+end
+set tot_step = 5000
+
+TITLE
+Long-term stability analysis based on damage mechanics:64 MPa,random properties
+;==============================
+;===== Boundary Condition =====
+; compressive stresses are negative
+;top & bottom
+fix y j=1
+;fix y j=51
+;apply syy aload hist ramp j=111     ;Pa
+;apply syy -50.0e6 j=111    ;Pa
+
+;left & right side
+;apply sxx 0.0e6 i=1      ;Pa
+;apply sxx 0.0e6 i=51     ;Pa
+
+;ini syy aload           ;Pa
+ini syy 0.0e6
+ini sxx 0.0e6            ;Pa
+ini szz 0.0e6
+;==============================
+
+;set output grid.emf
+;pl pen group grid fix app
+
+set dyn off
+
+;set plot emf
+;set output grid_ucs.emf
+;pl pen grid str fix app blue pl
+
+;ini xdis 0 ydis 0 xvel 0 yvel 0
+
+def strength_distribution
+
+  c_mean = 20.0e6
+  c_std  = 0.2e6
+  f_mean = 40.0
+  f_std = 0.5
+  t_mean = 10.0e6
+  t_std = 0.15e6
+  ;minium
+  c_min = 2.0*c_mean
+  f_min = 2.0*f_mean
+  t_min = 2.0*t_mean
+  ii_min = 1
+  jj_min = 1
+  
+  loop ii (1,izones)
+    loop jj (1,jzones)
+		 ;IF z_group(ii,jj) = 'specimen' THEN
+      IF model(ii,jj) # 1 THEN ;not null
+			
+      ;===== Cohesion, Friction, Tension =====
+      ;normal distribution (grand, mean 0.0 std 1.0)
+      m_rand = grand
+
+      c_current = c_mean + (c_std * m_rand)
+      f_current = f_mean + (f_std * m_rand)
+      t_current = t_mean + (t_std * m_rand)
+     ; oo = out('frictin random: '+string(f_current) +','+ string(m_rand))
+      cohesion(ii,jj) = c_current
+      friction(ii,jj) = f_current
+      tension(ii,jj) = t_current
+      if c_min > c_current then
+        c_min = c_current
+        f_min = f_current
+        t_min = t_current
+        ii_min = ii
+        jj_min = jj
+      endif
+      ex_1(ii,jj) = 0 ;elastic
+      ex_2(ii,jj) = D0
+      ex_3(ii,jj) = D0
+      ex_4(ii,jj) = D0
+		  END_IF
+     ;END_IF
+    endloop
+  endloop
+end
+strength_distribution
+
+
+def set_par2
+  s_factor = 0.5 ;dt scaling factor for random properties
+  $Nphi  = (1.0+sin(degrad*f_mean))/(1.0-sin(degrad*f_mean))
+  m_UCS = 2.0*c_mean*sqrt($Nphi)
+  
+  ;adaptitve values
+  if abs(aload/m_UCS)>0.9 then
+    dt_min = 0.1
+    n_step = 50
+  else
+    if abs(aload/m_UCS) > 0.8 then
+      dt_min = 1.0
+      n_step = 20
+    else
+      dt_min = 10.0
+      n_step = 10
+    endif
+  endif
+  load_time = 60.0 ;60s
+  ttf_I = (abs(aload)/m_UCS/exp(I_a0))^(-I_n) 
+  ttf_II = (abs(aload)/m_UCS/exp(II_a0))^(-II_n) 
+  ttf = s_factor*min(ttf_I, ttf_II)
+  stop_time = (1.5*max(ttf_I, ttf_II))
+  dt_ini = 10^int(log(ttf/float(n_step))) ;10 steps
+
+  if dt_ini < dt_min then
+    dt_ini = dt_min
+  endif
+  dt = dt_ini
+end
+set_par2
+
+def ev
+  $sum_yd1 = 0.0
+	$sum_yd2 = 0.0
+  loop i (1,igp)
+		$sum_yd1 = $sum_yd1+ydisp(i,1)
+		$sum_yd2 = $sum_yd2+ydisp(i,jgp)
+	endloop
+  axial_disp=abs($sum_yd2 - $sum_yd1)
+  ev = axial_disp/(y(1,jgp)-y(1,1))/float(igp)
+end
+
+;hist reset
+hist unbal
+hist tot_time
+;hist sigmav
+hist ev
+hist n_mode1
+hist n_mode2
+
+def AE_count
+  AE_count = n_mode1+n_mode2+n_pl
+end
+
+hist AE_count
+hist n_pl
+hist ex_2 i 25 j 50 ; first crack (first yielding*4,63)
+hist ex_3 i 25 j 50 
+hist dt
+hist axial_disp
+hist sigmav
+;------------------------
+;solve
+;------------------------
+save ini.sav
+
+;plot check for yielding before time-analysis
+;set plot emf
+;set output mohr.emf
+;pl pen fail pr
+
+;set output c_dist_ucs.emf
+;pl pen cohesion fill grid black
+
+;set output f_dist_ucs.emf
+;pl pen friction fill grid black
+
+;set output t_dist_ucs.emf
+;pl pen tension fill grid black
+
+;set output ini_ucs.emf
+;pl pen b state block str
+
+;=====================================
+def damage_model
+  ;while_stepping
+  $t_count = 0
+  d_I_sum = 0.0
+  d_II_sum = 0.0
+  time_current = tot_time
+  table_seq = 1
+
+  loop ii (1,izones)
+    loop jj (1,jzones)
+     IF model(ii,jj) # 1 THEN ;not null
+		 IF string(z_group(ii,jj)) # 'plate' THEN
+     IF state(ii,jj) = 0 THEN ; elastic
+      ;Already failed?
+      IF ex_1(ii,jj) # 1 THEN
+        ;elastic, calculate damage evolution
+
+        $sdif = sxx(ii,jj) - syy(ii,jj)
+        $s0   = 0.5 * (sxx(ii,jj) + syy(ii,jj))
+        $st   = 4.0 * sxy(ii,jj)^2
+        $rad  = 0.5 * sqrt($sdif^2 + $st)
+        $si   = $s0 - $rad
+        $sii  = $s0 + $rad
+        section
+          if szz(ii,jj) > $sii then
+            ; ---- szz is minor p.s. ----
+            $s1 = $si
+            $s2 = $sii
+            $s3 = szz(ii,jj)
+            exit section
+          end_if
+          if szz(ii,jj) < $si then
+            ; ---- szz is major p.s. ----
+            $s1 = szz(ii,jj)
+            $s2 = $si
+            $s3 = $sii
+             exit section
+          end_if
+            ; ---- szz is intermediate ---
+          $s1 = $si
+          $s2 = szz(ii,jj)
+          $s3 = $sii
+        end_section
+
+        $old_DI = ex_2(ii,jj)
+        $old_DII = ex_3(ii,jj)
+
+        $c_coh = cohesion(ii,jj)
+        $c_ten = tension(ii,jj)
+        $c_fric = friction(ii,jj)
+
+        ;shear - flac stress/strength
+         sII = ($s3-$s1)
+         $fric  = tan($c_fric*degrad)
+         $sphi  = sin($c_fric*degrad)
+         $anphi = (1.0 + $sphi)/(1.0 - $sphi)
+         $cn2   = 2.0 * $c_coh * sqrt($anphi)
+         if $fric = 0 then
+            $tcut = $c_ten
+         else
+            $tcut = min($c_ten,$c_coh/$fric)
+         end_if
+         ;if $s3 < $tcut then
+         $s1b  = $anphi * $s3 - $cn2
+         sIIc = ($s3 - $s1b)
+
+				 sI = $s3
+         sIc = min($c_ten,$c_coh/$fric)
+         ;endif
+        ;IF ii=1 THEN
+        ;  IF jj =1 THEN
+        ;    oo = out('S1 ='+string($s1)+',S3='+string($s3))
+        ;    oo = out('s_stress ='+string($sII))
+        ;    oo = out('s_act ='+string($s_act*$s_IIc))
+        ;  ENDIF
+        ;ENDIF
+
+        ;Damage calculation
+        ;tensile
+        IF sI>0.0 THEN
+          IF sI > s_act*sIc THEN
+            $dDI = I_A*((sI/sIc)^I_n)
+          ELSE
+            $dDI = 0.0
+          ENDIF
+        ELSE
+          $dDI = 0.0
+        ENDIF
+        DI = $old_DI + $dDI*(time_current-time_pre)
+        ex_2(ii,jj) = DI
+        ;shear
+        IF sII > s_act*sIIc THEN
+          $dDII = II_A*((sII/sIIc)^II_n)
+        ELSE
+          $dDII = 0.0
+        ENDIF
+        DII = $old_DII + $dDII*(time_current-time_pre)
+        ex_3(ii,jj) = DII
+        IF DI >= 1.0 THEN
+          IF DII >=1.0 THEN
+            IF DI > DII THEN
+              IF first_damage_on_I = 0 THEN
+                first_damage_on_I = 1
+                first_damage_time_I = time_current
+                first_damage_i_I = ii
+                first_damage_j_I = jj
+								first_damage_type = 'D_I_mix'
+              END_IF
+              ex_1(ii,jj) = 1       ;failed
+              ex_2(ii,jj) = 1.0
+              ex_3(ii,jj) = 1.0
+              cohesion(ii,jj) = c_res
+              friction(ii,jj) = f_res_I
+              tension(ii,jj) = 0.0
+              z_group(ii,jj) = 'D_I_mix'
+              n_mode1 = n_mode1+1
+							if n_mode1 = 1 then
+									ft_s1= $s1
+									ft_s2 = $s2
+									ft_s3 = $s3
+									ft_sI = sI
+									ft_sIc = sIc
+							endif
+            ELSE ; $DI<=$DII, DI>1 DII>1
+              IF first_damage_on_II = 0 THEN
+                first_damage_on_II = 1
+                first_damage_time_II = time_current
+                first_damage_i_II = ii
+                first_damage_j_II = jj
+								first_damage_type = 'D_II_mix'
+              END_IF
+              ex_1(ii,jj) = 1       ;failed
+              ex_2(ii,jj) = 1.0
+              ex_3(ii,jj) = 1.0
+              cohesion(ii,jj) = c_res
+              friction(ii,jj) = f_res_II
+              tension(ii,jj) = 0.0
+              z_group(ii,jj) = 'D_II_mix'
+              n_mode2 = n_mode2+1
+            ENDIF
+          ELSE ;$DII<1.0 & $DI>1.0
+            IF first_damage_on_I = 0 THEN
+              first_damage_on_I = 1
+              first_damage_time_I = time_current
+              first_damage_i_I = ii
+              first_damage_j_I = jj
+							first_damage_type = 'D_I'
+            END_IF
+            ex_1(ii,jj) = 1       ;failed
+            ex_2(ii,jj) = 1.0
+            cohesion(ii,jj) = c_res
+            friction(ii,jj) = f_res_I
+            tension(ii,jj) = 0.0
+            z_group(ii,jj) = 'D_I'
+            n_mode1 = n_mode1+1
+						if n_mode1 = 1 then
+									ft_s1= $s1
+									ft_s2 = $s2
+									ft_s3 = $s3
+									ft_sI = sI
+									ft_sIc = sIc
+						endif
+          ENDIF
+        ELSE ;DI<1
+          IF DII>=1.0 THEN
+            IF first_damage_on_II = 0 THEN
+              first_damage_on_II = 1
+              first_damage_time_II = dytime
+              first_damage_i_II = ii
+             	first_damage_j_II = jj
+							first_damage_type = 'D_II'
+            END_IF
+            ex_1(ii,jj) = 1       ;failed
+            ex_3(ii,jj) = 1.0
+            cohesion(ii,jj) = c_res
+            friction(ii,jj) = f_res_II
+            tension(ii,jj) = 0.0
+            z_group(ii,jj) = 'D_II'
+            n_mode2 = n_mode2+1
+          END_IF
+        END_IF
+		  END_IF ;ex_1
+     ELSE ;state #0
+ 				cohesion(ii,jj) = c_res
+        friction(ii,jj) = f_res_II
+        tension(ii,jj) = 0.0
+        ;bulk_mod(ii,jj) = kd
+        ;shear_mod(ii,jj) = gd
+		 END_IF
+     END_IF ;z_group
+		 END_IF ;null
+     ;count pl element
+		 if ex(ii,jj) = 0 then
+				if state(ii,jj) # 0 then
+					$t_count = $t_count + 1
+				endif
+			endif
+			;exit condition 
+			d_I_sum = d_I_sum + ex_2(ii,jj)
+			d_II_sum = d_II_sum + ex_3(ii,jj)
+    end_loop
+  end_loop
+
+  time_pre = tot_time
+  n_pl = $t_count
+end
+
+;set dyn on
+;set dytime 0
+;set dydt 0.0001
+
+set echo off
+
+def Running
+
+
+   ;====================
+   ;random properties
+;  stop_time = 200.0*dt_ini
+;  plot_time_dt = 20.0*dt_ini
+   
+  ;fixed properties
+  ;stop_time = 20.0*dt_ini
+  plot_time_dt = 2.0*dt_ini
+  pl_id = 1
+  $p_string = string(int(aload/1.0e6))+'MPa'
+  ;====================
+  m_converged = 1
+  i_converged = 1 ;initial loading
+  
+  ;initial loading ; 60s (load_time) loading to target value
+   LOOP iii (1,10)
+      app_load = float(iii)*aload/float(10)
+      tot_time = tot_time + 6.0
+      ;-----------------
+      damage_model
+      ;------------------
+      command
+        apply syy app_load j 111
+      endcommand
+      section
+        i_converged = 0
+        loop kkk (1,500)
+          command
+            step 100
+          end_command
+          if mech_ratio < eq_ratio then
+            i_converged = 1
+            exit section
+          endif
+        endloop
+      endsection
+  ENDLOOP
+   
+  ;check initial failure
+  IF i_converged = 0 THEN
+      oo = out('Failure before target load')
+      oo= out('   Failed time :'+string(tot_time))
+      oo = out('  Failure stress :'+string(app_load)+'Pa')
+      exit
+  ENDIF
+  s_file = 'initial loading'+$p_string+'.sav'
+  pl_name1 = 'initial loading'+$p_string+'.emf'
+  command
+    set output pl_name1
+    plot pen b str pl grid
+    save @s_file
+  endcommand
+  
+  ;exit condition 3;below activation stress
+  IF abs(d_I_sum+d_II_sum)<=1.0e-30 THEN
+    oo = out('Stresses of all zones are below the activation stress')
+    EXIT
+  ENDIF
+  ;keep load  constatnt
+  LOOP WHILE tot_time < stop_time 
+;    IF AE_count > exit_th THEN
+;      EXIT
+;    ENDIF
+
+    
+    IF m_converged = 0 THEN ;failed state
+      EXIT
+    ENDIF
+    tot_time = tot_time + dt
+	 ;------------------------------------------
+	  damage_model
+	 ;------------------------------------------
+	    
+    ;check max.unbal.
+	  command
+	    step 1
+	  end_command
+    
+    ;dt adjustment based on unbalanced force
+    if unbal>high_unbal then
+      dt = dt/10.0
+      if dt < dt_min then
+        dt = dt_min
+      endif
+    end_if
+    if unbal<low_unbal then
+      dt = dt*2.0
+      if dt > dt_ini then
+        dt = dt_ini
+      endif
+    end_if
+    
+    section
+      m_converged = 0
+      loop kkk (1,500)
+;      loop kkk (1,200)
+        command
+          step 100
+        end_command
+        if mech_ratio < eq_ratio then
+          m_converged = 1
+          pl_id = pl_id + 1
+          exit section
+        endif
+      endloop
+    endsection
+
+    ;IF abs(tot_time-pl_id*plot_time_dt) <= dt THEN
+    ;  pl_name1 = 'damage_disp_'+fstring(tot_time,3)+'_ucs.emf'
+    ;  pl_name2 = 'damage_str_'+fstring(tot_time,3)+'_ucs.emf'
+    ;  pl_name3 = 'damage_group'+fstring(tot_time,3)+'_ucs.emf'
+    ;  pl_name4 = 'damage2_cont'+fstring(tot_time,3)+'_ucs.emf'
+    ;  command
+    ;    ;set plot emf
+    ;    ;TITLE
+    ;    ;Long-term stability analysis based on damage mechanics - @tot_time
+    ;    set output @pl_name1
+    ;    pl pen b  group disp
+    ;    set output @pl_name2
+    ;    pl pen b group str
+    ;    set output @pl_name3
+    ;    pl pen b group grid pl
+    ;    set output @pl_name4
+    ;    pl pen b ex_3 fill grid
+    ;  end_command
+    ;  pl_id = pl_id + 1
+ 		;END_IF
+  end_loop
+end
+
+set high_unbal = 1000.0
+set low_unbal = 1.0
+
+
+Running
+
+def plot_final
+  $p_string = string(int(aload/1.0e6))+'MPa'
+  pl_name1 = 'disp_ucs'+$p_string+'.emf'
+  pl_name2 = 'str_ucs'+$p_string+'.emf'
+  pl_name3 = 'group_ucs'+$p_string+'.emf'
+  pl_name4 = 'ssr_ucs'+$p_string+'.emf'
+  command
+        ;set plot emf
+        ;TITLE
+        ;Long-term stability analysis based on damage mechanics - @tot_time
+        set output @pl_name1
+        pl pen b group disp
+        set output @pl_name2
+        pl pen b group str
+        set output @pl_name3
+        pl pen b group grid pl
+        set output @pl_name4
+        pl pen b ssr fill grid
+  end_command
+  s_file = 'ucs_static'+$p_string+'.sav'
+  command
+    save @s_file
+  endcommand
+  p_file = 'ucs_AE'+$p_string+'.emf'
+  command
+    set output @p_file
+    pl pen hist 6 vs 2 ;AE
+  endcommand
+  p_file = 'ucs_disp'+$p_string+'.emf'
+  command
+    set output @p_file
+    pl pen hist 11 vs 2
+  endcommand
+  
+  p_file = 'ucs_load'+$p_string+'.emf'
+  command
+    set output @p_file
+    pl pen hist 12 vs 2
+  endcommand
+  
+  p_file = 'ucs_deform'+$p_string+'.emf'
+  command 
+   set output @p_file
+   pl pen b grid mag
+  endcommand
+  h_file = 'ucs_disp'+$p_string+'.dat'
+  command
+    set hisfile @h_file
+    hist write skip 10 11 vs 2
+  endcommand
+  h_file = 'ucs_AE'+$p_string+'.dat'
+  command
+    set hisfile @h_file
+    hist write skip 10 4 5 6 vs 2
+  endcommand
+  h_file = 'ucs_load'+$p_string+'.dat'
+  command
+    set hisfile @h_file
+    hist write skip 10 12 vs 2
+  endcommand
+end
+plot_final
+
+
+
+
+
+;set output damageI_ucs.emf
+;pl pen ex_2 fill grid
+
+;set output damageI_hist_ucs.emf
+;pl pen hist 4 vs 2 ;n_mode1
+
+;set output damageII_ucs.emf
+;pl pen ex_3 fill grid
+
+;set output damageII_hist_ucs.emf
+;pl pen hist 5 vs 2 ;n_mode2
+
+;set output hist_dt.emf
+;pl pen hi 10 vs 2
+
+;set output unbal.emf
+;pl pen hi 1 vs 2
+;set log on
+
+def printout
+  IF first_damage_on_I = 1 THEN
+    oo = out('I,J:'+string(first_damage_i_I)+','+string(first_damage_j_I))
+    oo = out('time:'+string(first_damage_time_I) +' sec')
+  ELSE
+    oo = out('No cracks.')
+  END_IF
+
+ IF first_damage_on_II = 1 THEN
+    oo = out('I,J:'+string(first_damage_i_II)+','+string(first_damage_j_II))
+    oo = out('time:'+string(first_damage_time_II) +' sec')
+  ELSE
+    oo = out('No cracks.')
+  END_IF
+  
+  oo = out('Failure time :'+string(tot_time-load_time))
+  oo = out('total loop counts :'+string(pl_id))
+end
+set echo on
+printout
+
+return
