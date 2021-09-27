@@ -476,13 +476,8 @@ set echo off
 def Running
 
 
-   ;====================
-   ;random properties
-;  stop_time = 200.0*dt_ini
-;  plot_time_dt = 20.0*dt_ini
    
   ;fixed properties
-  ;stop_time = 20.0*dt_ini
   plot_time_dt = 2.0*dt_ini
   pl_id = 1
   $p_string = string(int(aload/1.0e6))+'MPa'
@@ -491,36 +486,37 @@ def Running
   i_converged = 1 ;initial loading
   
   ;initial loading ; 60s (load_time) loading to target value
-   LOOP iii (1,10)
-      app_load = float(iii)*aload/float(10)
-      tot_time = tot_time + 6.0
-      ;-----------------
-      damage_model
-      ;------------------
-      command
-        apply syy app_load j 111
-      endcommand
-      section
-        i_converged = 0
-        loop kkk (1,500)
-          command
-            step 100
-          end_command
-          if mech_ratio < eq_ratio then
-            i_converged = 1
-            exit section
-          endif
-        endloop
-      endsection
+  LOOP iii (1,10)
+    app_load = float(iii)*aload/float(10)
+    tot_time = tot_time + 6.0
+    ;-----------------
+    damage_model
+    ;------------------
+    command
+      apply syy app_load j 111
+    endcommand
+    section
+      i_converged = 0
+      loop kkk (1,500)
+        command
+          step 100
+        end_command
+        if mech_ratio < eq_ratio then
+          i_converged = 1
+          exit section
+        endif
+      endloop
+    endsection
   ENDLOOP
    
   ;check initial failure
   IF i_converged = 0 THEN
-      oo = out('Failure before target load')
-      oo= out('   Failed time :'+string(tot_time))
-      oo = out('  Failure stress :'+string(app_load)+'Pa')
-      exit
+    oo = out('Failure before target load')
+    oo = out('   Failed time :'+string(tot_time))
+    oo = out('  Failure stress :'+string(app_load)+'Pa')
+    exit
   ENDIF
+  
   s_file = 'initial loading'+$p_string+'.sav'
   pl_name1 = 'initial loading'+$p_string+'.emf'
   command
@@ -534,20 +530,16 @@ def Running
     oo = out('Stresses of all zones are below the activation stress')
     EXIT
   ENDIF
+
   ;keep load  constatnt
   LOOP WHILE tot_time < stop_time 
-;    IF AE_count > exit_th THEN
-;      EXIT
-;    ENDIF
-
-    
     IF m_converged = 0 THEN ;failed state
       EXIT
     ENDIF
     tot_time = tot_time + dt
-	 ;------------------------------------------
+	  ;------------------------------------------
 	  damage_model
-	 ;------------------------------------------
+	  ;------------------------------------------
 	    
     ;check max.unbal.
 	  command
@@ -561,6 +553,7 @@ def Running
         dt = dt_min
       endif
     end_if
+    
     if unbal<low_unbal then
       dt = dt*2.0
       if dt > dt_ini then
@@ -571,7 +564,6 @@ def Running
     section
       m_converged = 0
       loop kkk (1,500)
-;      loop kkk (1,200)
         command
           step 100
         end_command
@@ -582,29 +574,10 @@ def Running
         endif
       endloop
     endsection
-
-    ;IF abs(tot_time-pl_id*plot_time_dt) <= dt THEN
-    ;  pl_name1 = 'damage_disp_'+fstring(tot_time,3)+'_ucs.emf'
-    ;  pl_name2 = 'damage_str_'+fstring(tot_time,3)+'_ucs.emf'
-    ;  pl_name3 = 'damage_group'+fstring(tot_time,3)+'_ucs.emf'
-    ;  pl_name4 = 'damage2_cont'+fstring(tot_time,3)+'_ucs.emf'
-    ;  command
-    ;    ;set plot emf
-    ;    ;TITLE
-    ;    ;Long-term stability analysis based on damage mechanics - @tot_time
-    ;    set output @pl_name1
-    ;    pl pen b  group disp
-    ;    set output @pl_name2
-    ;    pl pen b group str
-    ;    set output @pl_name3
-    ;    pl pen b group grid pl
-    ;    set output @pl_name4
-    ;    pl pen b ex_3 fill grid
-    ;  end_command
-    ;  pl_id = pl_id + 1
- 		;END_IF
   end_loop
 end
+
+
 
 set high_unbal = 1000.0
 set low_unbal = 1.0

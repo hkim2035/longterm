@@ -21,8 +21,42 @@ def strainv(bot,top,length):
     return axial_disp, axial_strain
 
 
+def common_set(tmpzz, coh, fric, ten, group):
+    tmpzz.set_extra(1,1)
+    tmpzz.set_prop('cohesion', coh)
+    tmpzz.set_prop('friction', fric)
+    tmpzz.set_prop('tension', ten)
+    tmpzz.set_group(group)
+
+def hist_writing():
+    global tot_time, unbal, ev, n_mode1, n_mode2, n_pl, AE_count, dt, axial_disp, sigmav
+    global his_time, hist_unbal, hist_ev, hist_n_mode1, hist_n_mode2
+    global his_n_pl, hist_AE_count, hist_dt, hist_axial_disp, hist_sigmav
+
+    hist_time.append(tot_time)
+    hist_unbal.append(unbal)
+    hist_dt.append(dt)
+    
+def hist_writing_in_damage():
+    global tot_time, unbal, ev, n_mode1, n_mode2, n_pl, AE_count, dt, axial_disp, sigmav
+    global his_time, hist_unbal, hist_ev, hist_n_mode1, hist_n_mode2
+    global his_n_pl, hist_AE_count, hist_dt, hist_axial_disp, hist_sigmav
+
+    hist_ev.append(ev)
+    hist_n_mode1.append(n_mode1)
+    hist_n_mode2.append(n_mode2)
+    hist_n_pl.append(n_pl)
+    AE_count = n_mode1+n_mode2+n_pl
+    hist_AE_count.append(AE_count)
+    hist_axial_disp.append(axial_disp)
+    hist_sigmav.append(sigmav)
+
+
+
 
 #=========== User setup ===========
+sav_folder = "D:\\Itasca\\Flac3d600_application_data\\My Projects\\longterm\\"
+
 gr = {'x': 50, 'y': 1, 'z': 110}
 rd = {'x': 0.05, 'y': 0.001, 'z': 0.11}   
 rp = {'den': 2700.0, 'bulk': 32.69e9, 'shear': 20.56e9, 'coh': 20.0e6, 'fric': 40.0, 'ten': 10.0e6, 'dil': 10.0}
@@ -54,24 +88,21 @@ II_n = 46.56
 I_A = (1.0 - D0)/(math.exp(I_a0)**I_n)
 II_A = (1.0 - D0)/(math.exp(II_a0)**II_n)
 
-first_damage_on_I = 0
-first_damage_on_II = 0
-first_damage_time_I = 10.0e100
-first_damage_time_II = 10.0e100
-first_damage_i_I = 0
-first_damage_j_I = 0
-first_damage_i_II = 0
-first_damage_j_II = 0
+# [check, time, id, type]
+first_dI_info = [False, 10.0e100, None, ""]
+first_dII_info = [False, 10.0e100, None, ""]
  
-first_damage_type = 'none'
-
 #scg
 n_mode2 = 0
 n_mode1 = 0
 
 #plastic state
 n_pl = 0
-  
+
+d_I_sum = 0
+d_II_sum = 0
+
+
 tot_time = 0.0
 time_current = 0.0
 time_pre = 0.0
@@ -121,10 +152,12 @@ za.set_prop_scalar('friction', f_mean + np.random.uniform(-1,1,noz)*f_std)
 np.random.seed(seed[2])
 za.set_prop_scalar('tension', t_mean + np.random.uniform(-1,1,noz)*t_std)
 
-za.set_extra(1, np.zeros(noz))
-za.set_extra(2, np.ones(noz)*D0)
-za.set_extra(3, np.ones(noz)*D0)
-za.set_extra(4, np.ones(noz)*D0)
+zm = [z for z in it.zone.list() if z.model() != 'null']
+for id, zz in enumerate(zm):
+    zz.set_extra(1,0)  # 0 elastic 1 plenumerate(asti)c
+    zz.set_extra(2,0)  # DI
+    zz.set_extra(3,0)  # D2
+    
 
 c_min_id = za.prop_scalar('cohesion').argmin()
 c_min = za.prop_scalar('cohesion')[c_min_id]
@@ -161,7 +194,223 @@ axial_disp, ev = strainv(gp_bot,gp_top,rd['z'])
 # s_zz 
 sigmav = za.stress()[:,2,2].sum()/noz
 
-# array: tot_time, unbal, ev, n_mode1, n_mode2, n_pl, AE_count, dt, axial_disp, sigmav
+
+def damage_model():
+    global sI, sIc, sII, sIIc, d_I_sum, d_II_sum
+    zmf = [z for z in it.zone.list() if ((z.model() != 'null') and (z.extra(1)==1))]
+    for id, zz in enumerate(zmf):
+        zz.set_prop('cohesion', c_res)
+        zz.set_prop('friction', f_res_II)
+        zz.set_prop('tension', 0.0)
+    
+    zme = [z for z in it.zone.list() if ((z.model() != 'null') and (z.extra(1)!=1))]
+    for id, zz in enumerate(zme):
+        zsig = zz.stress_prin()
+        ts1 = -min(zsig[0], zsig[1], zsig[2])
+        ts3 = -max(zsig[0], zsig[1], zsig[2])
+        tc_coh = zz.prop('cohesion')
+        tc_fric = zz.prop('friction')
+        tc_ten = zz.prop('tension')
+        told_DI = zz.extra(2)
+        told_DII = zz.extra(3)
+        sII= ts3-ts1
+        tfric = math.tan(math.radians(tc_fric))
+        tsphi = math.sin(math.radians(tc_fric))
+        tanphi = (1.0+tsphi)/(1.0-tsphi)
+        tcn2 = 2.0*tc_coh*math.sqrt(tanphi)
+        ttcut = tc_ten if tfric == 0 else min(tc_ten,tc_coh/tfric)
+        ts1b = tanphi*ts3-tcn2
+        sIIc = ts3-ts1b
+        sI = ts3
+        sIc = min(tc_ten,tc_coh/tfric)
+
+        if sI > 0.:
+            tdDI = I_A*((sI/sIc)**I_n) if sI>(s_act*sIc) else 0.
+        else:
+            tdDI = 0.
+        tdDI = max(tdDI, 0.)
+        DI = told_DI + tdDI*(time_current - time_pre)
+
+        if sII > 0:
+            tdDII = II_A*((sII/sIIc)**II_n) if sII>(s_act*sIIc) else 0.
+        else:
+            tdDII = 0.
+        tdDII = max(tdDII, 0.)
+        DII = told_DII + tdDII*(time_current - time_pre)
+
+        zz.set_extra(2,DI)
+        zz.set_extra(3,DII)
+
+        if DI>=1.:
+            if DII>=1.:
+                if DI>DII: # case1
+                    if first_dI_info[0]==False:
+                        first_dI_info = [True, time_current, zz.id(), 'D_I_mix']
+                        # common_set(tmpzz, coh, fric, ten, group):
+                        common_set(zz, c_res, f_res_I, 0,0, 'D_I_mix')
+                        zz.set_extra(2,1.0)
+                        zz.set_extra(3,1.0)
+                        n_mode1 += 1
+                        if n_mode1 == 1:
+                            ft_info = [ts1, ts2, ts3, sI, sIc]
+                else:      # case2
+                    if first_dII_info[0]==False:
+                        first_dII_info = [True, time_current, zz.id(), 'D_II_mix']
+                        common_set(zz, c_res, f_res_II, 0,0, 'D_II_mix')
+                        zz.set_extra(2,1.0)
+                        zz.set_extra(3,1.0)
+                        n_mode2 += 1
+            else:          # case3
+                if first_dI_info[0]==False:
+                    first_dI_info = [True, time_current, zz.id(), 'D_I']
+                    common_set(zz, c_res, f_res_I, 0,0, 'D_I')
+                    zz.set_extra(2,1.0)
+                    n_mode1 += 1
+                    if n_mode1 == 1:
+                        ft_info = [ts1, ts2, ts3, sI, sIc]
+        else:
+            if DII>=1.:    # case4
+                if first_dII_info[0]==False:
+                        first_dII_info = [True, time_current, zz.id(), 'D_II']
+                        common_set(zz, c_res, f_res_II, 0,0, 'D_II')
+                        zz.set_extra(3,1.0)
+                        n_mode2 += 1
+            # else:          # pass
+                
+    zyield = [z for z in it.zone.list() if ((z.extra(1) == 0) and (z.state(True)!=0))]
+    for id, tmp in enumerate(zyield):
+        tmp.set_group('YIELD')
+    tt_count = len(zyield)
+    
+    d_I_sum = za.extra(2).sum()
+    d_II_sum = za.extra(3).sum()
+
+    hist_writing_in_damage()
+
+
+        
+
+    
+    
+
+
+# pre
+plot_time_dt = 2.0*dt_ini
+pl_id = 1
+pl_str = str(int(abs(aload)/1.0e6))+"MPa"
+ini_converged = True
+second_converged = True
+
+hist_time = list()
+hist_unbal = list()
+hist_ev = list()
+hist_n_mode1 = list()
+hist_n_mode2 = list()
+hist_n_pl = list()
+hist_AE_count = list()
+hist_dt = list()
+hist_axial_disp = list()
+hist_sigmav = list()
+
+
+# ###### 1st stage: initial 60 sec #########
+it.command("""
+plot create 'ini'
+plot 'ini' item create zone-boundary 
+plot 'ini' item create zone label state average
+plot 'ini' item create axes
+""")
+
+increment = 5   #sec
+for ii in range (increment, 60+increment, increment):
+    app_load = float(ii)/60.0*aload
+    tot_time += increment
+    damage_model()
+    it.command("zone face apply stress-normal {} range position-z {},{}".format(app_load,rd['z']-0.01,rd['z']+0.01))
+    ini_converged = False
+    for jj in range (1,501,1):
+        it.command("model step 100")
+        unbal = it.zone.unbal()
+        print("{} sec unbal: {}".format(tot_time, unbal))
+        if it.zone.unbal() < eq_ratio:
+            ini_converged = True
+            hist_writing()
+            break 
+    
+plt_fname = sav_folder + pl_str + "_initial_loading.svg"
+sav_fname = sav_folder + pl_str + "_initial_loading.f3sav"
+it.command("""
+model save '{}'
+plot 'ini' export svg filename '{}'
+""".format(sav_fname, plt_fname))
+
+#exit check
+if ini_converged == False:
+    print("===== Result =====")
+    print("Failure during initial stage")
+    print(" - Failure time (sec): {}".format(tot_time))
+    print(" - Failure stress (Pa): {}".format(app_load))
+    exit()
+
+#exit check
+if abs(d_I_sum+d_II_sum) <= 1.0e-30:
+    print("===== Result =====")
+    print("Stresses of all zones are below the activation stress")
+    exit()
+
+
+
+high_unbal = 1000.0
+low_unbal = 1.0
+
+#***** 2nd stage: until stop_time *****
+it.command("""
+plot create 'second'
+plot 'second' item create zone-boundary 
+plot 'second' item create zone label state average
+plot 'second' item create axes
+""")
+
+while tot_time < stop_time:
+    if second_converged == False:
+        break
+    tot_time += dt
+    damage_model()
+    it.command("model step 10")
+    if it.zone.unbal() > high_unbal:
+        dt = max(dt/10.0,dt_min)
+    if it.zone.unbal() < low_unbal:
+        dt = min(dt*2.0,dt_ini)        
+    
+    second_converged = False
+    for jj in range (1,501,1):
+        it.command("model step 100")
+        unbal = it.zone.unbal()
+        print("{} sec unbal: {}".format(tot_time, unbal))
+        if it.zone.unbal() < eq_ratio:
+            second_converged = True
+            hist_writing()
+            break 
+
+plt_fname = sav_folder + pl_str + "_second_loading.svg"
+sav_fname = sav_folder + pl_str + "_second_loading.f3sav"
+it.command("""
+model save '{}'
+plot 'second' export svg filename '{}'
+""".format(sav_fname, plt_fname))
+
+#===== making graph and csv using history data =====
+
+# workflow automation -> simple report pdf maker ?
+
+
+
+
+
+
+
+
+
 
 
 
