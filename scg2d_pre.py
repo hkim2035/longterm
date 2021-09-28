@@ -3,7 +3,6 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 import itasca as it
 it.command("python-reset-state false")
@@ -12,8 +11,7 @@ from itasca import zonearray as za
 from itasca import gridpointarray as gpa
 
 
-def strainv(bot,top,length):
-    global gpa
+def strainv(gpa, bot,top,length):
     zdis_top = gpa.disp()[:,2][top-1].sum()/len(top)
     zdis_bot = gpa.disp()[:,2][bot-1].sum()/len(bot)
     axial_disp = abs(zdis_top - zdis_bot)
@@ -28,28 +26,14 @@ def common_set(tmpzz, coh, fric, ten, group):
     tmpzz.set_prop('tension', ten)
     tmpzz.set_group(group)
 
-def hist_writing():
-    global tot_time, unbal, ev, n_mode1, n_mode2, n_pl, AE_count, dt, axial_disp, sigmav
-    global his_time, hist_unbal, hist_ev, hist_n_mode1, hist_n_mode2
-    global his_n_pl, hist_AE_count, hist_dt, hist_axial_disp, hist_sigmav
+def hist_writing(tot_time, unbal, dt):
+    global his_time, hist_unbal, hist_dt
 
     hist_time.append(tot_time)
     hist_unbal.append(unbal)
     hist_dt.append(dt)
     
-def hist_writing_in_damage():
-    global tot_time, unbal, ev, n_mode1, n_mode2, n_pl, AE_count, dt, axial_disp, sigmav
-    global his_time, hist_unbal, hist_ev, hist_n_mode1, hist_n_mode2
-    global his_n_pl, hist_AE_count, hist_dt, hist_axial_disp, hist_sigmav
-
-    hist_ev.append(ev)
-    hist_n_mode1.append(n_mode1)
-    hist_n_mode2.append(n_mode2)
-    hist_n_pl.append(n_pl)
-    AE_count = n_mode1+n_mode2+n_pl
-    hist_AE_count.append(AE_count)
-    hist_axial_disp.append(axial_disp)
-    hist_sigmav.append(sigmav)
+ 
 
 
 
@@ -190,21 +174,25 @@ stop_time = (1.5 * max(ttf_I, ttf_II))
 dt_ini = 10**int(math.log(ttf/float(n_step)))
 dt = min(dt_ini,dt_min)
 
-axial_disp, ev = strainv(gp_bot,gp_top,rd['z'])
+axial_disp, ev = strainv(gpa, gp_bot,gp_top,rd['z'])
 # s_zz 
 sigmav = za.stress()[:,2,2].sum()/noz
 
 
 def damage_model():
     global sI, sIc, sII, sIIc, d_I_sum, d_II_sum
-    zmf = [z for z in it.zone.list() if ((z.model() != 'null') and (z.extra(1)==1))]
-    for id, zz in enumerate(zmf):
-        zz.set_prop('cohesion', c_res)
-        zz.set_prop('friction', f_res_II)
-        zz.set_prop('tension', 0.0)
+    global tot_time, unbal, ev, n_mode1, n_mode2, n_pl, AE_count, dt, axial_disp, sigmav
+    global his_time, hist_unbal, hist_ev, hist_n_mode1, hist_n_mode2
+    global his_n_pl, hist_AE_count, hist_dt, hist_axial_disp, hist_sigmav
+
+    zmf = np.logical_and(za.live_mechanical(), za.extra(1)==1)
+    za.set_prop_scalar('cohesion', c_res)[zmf]
+    za.set_prop_scalar('friction', f_res_II)[zmf]
+    za.set_prop_scalar('tension', 0.0)[zmf]
+
+    zme = np.logical_and(za.live_mechanical(), za.extra(1)!=1)
+    zsig = za. ()[zme]
     
-    zme = [z for z in it.zone.list() if ((z.model() != 'null') and (z.extra(1)!=1))]
-    for id, zz in enumerate(zme):
         zsig = zz.stress_prin()
         ts1 = -min(zsig[0], zsig[1], zsig[2])
         ts3 = -max(zsig[0], zsig[1], zsig[2])
@@ -277,15 +265,21 @@ def damage_model():
                         n_mode2 += 1
             # else:          # pass
                 
-    zyield = [z for z in it.zone.list() if ((z.extra(1) == 0) and (z.state(True)!=0))]
-    for id, tmp in enumerate(zyield):
-        tmp.set_group('YIELD')
-    tt_count = len(zyield)
-    
-    d_I_sum = za.extra(2).sum()
-    d_II_sum = za.extra(3).sum()
-
-    hist_writing_in_damage()
+        zyield = [z for z in it.zone.list() if ((z.extra(1) == 0) and (z.state(True)!=0))]    
+        for id, tmp in enumerate(zyield):    
+            tmp.set_group('YIELD')    
+        tt_count = len(zyield)               
+        d_I_sum = za.extra(2).sum()    
+        d_II_sum = za.extra(3).sum()           
+        
+        hist_ev.append(ev)    
+        hist_n_mode1.append(n_mode1)    
+        hist_n_mode2.append(n_mode2)    
+        hist_n_pl.append(n_pl)    
+        AE_count = n_mode1+n_mode2+n_pl    
+        hist_AE_count.append(AE_count)    
+        hist_axial_disp.append(axial_disp)    
+        hist_sigmav.append(sigmav)    
 
 
         
@@ -301,6 +295,8 @@ pl_str = str(int(abs(aload)/1.0e6))+"MPa"
 ini_converged = True
 second_converged = True
 
+hist_tubdt = list()
+append1 = hist_tubdt.append
 hist_time = list()
 hist_unbal = list()
 hist_ev = list()
@@ -334,7 +330,7 @@ for ii in range (increment, 60+increment, increment):
         print("{} sec unbal: {}".format(tot_time, unbal))
         if it.zone.unbal() < eq_ratio:
             ini_converged = True
-            hist_writing()
+            append1([tot_time, unbal, dt])
             break 
     
 plt_fname = sav_folder + pl_str + "_initial_loading.svg"
@@ -389,7 +385,7 @@ while tot_time < stop_time:
         print("{} sec unbal: {}".format(tot_time, unbal))
         if it.zone.unbal() < eq_ratio:
             second_converged = True
-            hist_writing()
+            hist_writing(tot_time, unbal, dt)
             break 
 
 plt_fname = sav_folder + pl_str + "_second_loading.svg"
